@@ -15,8 +15,7 @@
     .header{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap}
     h1{margin:0;font-size:1.6rem} .sub{margin:4px 0 0;color:var(--muted);font-size:.92rem}
     .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    select,input,button{padding:9px 10px;border-radius:8px;border:1px solid #d0d7e2;background:#fff}
-    button{cursor:pointer;font-weight:600}
+    select,input{padding:9px 10px;border-radius:8px;border:1px solid #d0d7e2;background:#fff}
     .year-list{display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid #d0d7e2;border-radius:8px;background:#fff;flex-wrap:wrap}
     .year-list label{font-size:.85rem;color:#374151}
     .grid-kpi{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:12px;margin-top:16px}
@@ -45,8 +44,8 @@
       <div class="filters">
         <label class="muted">Date from <input id="fromDate" type="date" /></label>
         <label class="muted">Date to <input id="toDate" type="date" /></label>
-                <input id="search" placeholder="Search organization..." />
-        <button id="clearFiltersBtn" type="button">Clear Filters</button>
+        <select id="statusFilter"><option value="">All Statuses</option></select>
+        <input id="search" placeholder="Search organization..." />
       </div>
     </div>
 
@@ -57,9 +56,6 @@
 const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vStzVyyVWvdBQEhmYFCuhNjsluP8uPgxRQGLOZj4g_2RJ6WnV0v-oOjS93bLNWnGQeXW1k_tDmznTS-/pub?gid=0&single=true&output=csv';
 let raw = [];
 let charts = {};
-const activeFilters = { org:null, reposted:null, positionType:null, monthYear:null };
-let defaultFromDate = null;
-let defaultToDate = null;
 
 const parseCSV = (text) => {
   const rows = text.trim().split(/\r?\n/).map(row => {
@@ -125,14 +121,14 @@ function render(filtered){
   const mk = (id,config)=>{destroy(id); charts[id]=new Chart(document.getElementById(id),config)};
 
   const orgTop = groupTop(filtered,'Organization Name',10);
-  mk('orgChart',{type:'bar',data:{labels:orgTop.map(x=>x[0]),datasets:[{label:'Jobs',data:orgTop.map(x=>x[1]),backgroundColor:'#1f77d0'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxRotation:60,minRotation:60}}},onClick:(evt,elements,chart)=>{if(!elements.length)return;const label=chart.data.labels[elements[0].index];activeFilters.org=activeFilters.org===label?null:label;applyFilters();}}});
+  mk('orgChart',{type:'bar',data:{labels:orgTop.map(x=>x[0]),datasets:[{label:'Jobs',data:orgTop.map(x=>x[1]),backgroundColor:'#1f77d0'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxRotation:60,minRotation:60}}}}});
 
   const reposted = groupTop(filtered,'Reposted',10);
-  mk('repostedChart',{type:'doughnut',data:{labels:reposted.map(x=>x[0]),datasets:[{data:reposted.map(x=>x[1])}]},options:{plugins:{legend:{position:'bottom'}},onClick:(evt,elements,chart)=>{if(!elements.length)return;const label=chart.data.labels[elements[0].index];activeFilters.reposted=activeFilters.reposted===label?null:label;applyFilters();}}});
+  mk('repostedChart',{type:'doughnut',data:{labels:reposted.map(x=>x[0]),datasets:[{data:reposted.map(x=>x[1])}]},options:{plugins:{legend:{position:'bottom'}}}});
 
   const pos = groupTop(filtered,'Position Type',8);
   const posTotal = pos.reduce((s,[,v])=>s+v,0) || 1;
-  mk('positionChart',{type:'pie',data:{labels:pos.map(([k,v])=>`${k} (${((v/posTotal)*100).toFixed(1)}%)`),datasets:[{data:pos.map(x=>x[1])}]},options:{plugins:{legend:{position:'bottom'}},onClick:(evt,elements)=>{if(!elements.length)return;const idx=elements[0].index;const label=pos[idx][0];activeFilters.positionType=activeFilters.positionType===label?null:label;applyFilters();}}});
+  mk('positionChart',{type:'pie',data:{labels:pos.map(([k,v])=>`${k} (${((v/posTotal)*100).toFixed(1)}%)`),datasets:[{data:pos.map(x=>x[1])}]},options:{plugins:{legend:{position:'bottom'}}}});
 
   drawYearLines(filtered);
 }
@@ -157,7 +153,7 @@ function drawYearLines(filtered){
     charts['yearLineChart'] = new Chart(document.getElementById('yearLineChart'), {
       type:'line',
       data:{labels:months,datasets},
-      options:{plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,title:{display:true,text:'Number of Postings'}}},onClick:(evt,elements,chart)=>{if(!elements.length)return;const pt=elements[0];const year=Number(chart.data.datasets[pt.datasetIndex].label);const month=pt.index;const key=`${year}-${month}`;activeFilters.monthYear=activeFilters.monthYear===key?null:key;applyFilters();}}
+      options:{plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,title:{display:true,text:'Number of Postings'}}}}
     });
   };
 
@@ -165,35 +161,17 @@ function drawYearLines(filtered){
   updateLine();
 }
 
-
-function clearAllFilters(){
-  activeFilters.org = null;
-  activeFilters.reposted = null;
-  activeFilters.positionType = null;
-  activeFilters.monthYear = null;
-  document.getElementById('search').value = '';
-  if (defaultFromDate) document.getElementById('fromDate').value = defaultFromDate;
-  if (defaultToDate) document.getElementById('toDate').value = defaultToDate;
-  applyFilters();
-}
-
 function applyFilters(){
   const fromDate = document.getElementById('fromDate').value ? new Date(document.getElementById('fromDate').value + 'T00:00:00Z') : null;
   const toDate = document.getElementById('toDate').value ? new Date(document.getElementById('toDate').value + 'T23:59:59Z') : null;
+  const status = document.getElementById('statusFilter').value;
   const q = document.getElementById('search').value.trim().toLowerCase();
   const filtered = raw.filter(r => {
     const d = parseDate(r['Date Created']);
     if (fromDate && (!d || d < fromDate)) return false;
     if (toDate && (!d || d > toDate)) return false;
+    if (status && r['Posting Status'] !== status) return false;
     if (q && !r['Organization Name'].toLowerCase().includes(q)) return false;
-    if (activeFilters.org && r['Organization Name'] !== activeFilters.org) return false;
-    if (activeFilters.reposted && r['Reposted'] !== activeFilters.reposted) return false;
-    if (activeFilters.positionType && r['Position Type'] !== activeFilters.positionType) return false;
-    if (activeFilters.monthYear) {
-      if (!d) return false;
-      const [yr, mn] = activeFilters.monthYear.split('-').map(Number);
-      if (d.getUTCFullYear() !== yr || d.getUTCMonth() !== mn) return false;
-    }
     return true;
   });
   render(filtered);
@@ -203,17 +181,17 @@ function applyFilters(){
   const csv = await fetch(CSV_URL).then(r=>r.text());
   raw = parseCSV(csv);
 
+  const statuses = [...new Set(raw.map(r=>r['Posting Status']).filter(Boolean))].sort();
+  const sf=document.getElementById('statusFilter');
+  statuses.forEach(v=>sf.insertAdjacentHTML('beforeend',`<option>${v}</option>`));
 
   const dates = raw.map(r=>parseDate(r['Date Created'])).filter(Boolean).sort((a,b)=>a-b);
   if (dates.length){
-    defaultFromDate = dates[0].toISOString().slice(0,10);
-    defaultToDate = dates[dates.length-1].toISOString().slice(0,10);
-    document.getElementById('fromDate').value = defaultFromDate;
-    document.getElementById('toDate').value = defaultToDate;
+    document.getElementById('fromDate').value = dates[0].toISOString().slice(0,10);
+    document.getElementById('toDate').value = dates[dates.length-1].toISOString().slice(0,10);
   }
 
-  ['fromDate','toDate','search'].forEach(id=>document.getElementById(id).addEventListener('input',applyFilters));
-  document.getElementById('clearFiltersBtn').addEventListener('click', clearAllFilters);
+  ['fromDate','toDate','statusFilter','search'].forEach(id=>document.getElementById(id).addEventListener('input',applyFilters));
   applyFilters();
 })();
 </script>

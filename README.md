@@ -1,2 +1,2 @@
-# web-dashboard
-Web application for the dashboard
+# myCareer-dashboard
+Dashboard based on data from myCareer
