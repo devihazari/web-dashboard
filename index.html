@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PowerBI-Style Job Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root { --bg:#f4f7fb; --card:#fff; --text:#1f2937; --muted:#6b7280; --accent:#1f77d0; }
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+    .container{max-width:1280px;margin:0 auto;padding:20px}
+    .header{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap}
+    h1{margin:0;font-size:1.6rem} .sub{margin:4px 0 0;color:var(--muted);font-size:.92rem}
+    .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    select,input,button{padding:9px 10px;border-radius:8px;border:1px solid #d0d7e2;background:#fff}
+    button{cursor:pointer;font-weight:600}
+    .year-list{display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid #d0d7e2;border-radius:8px;background:#fff;flex-wrap:wrap}
+    .year-list label{font-size:.85rem;color:#374151}
+    .grid-kpi{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:12px;margin-top:16px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+    .kpi-title{font-size:.8rem;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+    .kpi-value{font-size:1.65rem;font-weight:700;margin-top:6px}
+    .main-grid{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
+    .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .card h3{margin:0 0 10px;font-size:1rem}
+    table{width:100%;border-collapse:collapse;font-size:.85rem}
+    th,td{padding:8px;border-bottom:1px solid #edf0f5;text-align:left}
+    th{font-weight:600;background:#fafbfe;position:sticky;top:0}
+    .table-wrap{max-height:360px;overflow:auto}
+    .loading{padding:40px;color:var(--muted)}
+    .muted{color:var(--muted);font-size:.85rem}
+    @media (max-width:1000px){.main-grid,.charts-grid{grid-template-columns:1fr}.grid-kpi{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>Job Posting Performance Dashboard</h1>
+        <p class="sub">Live data source: published Google Sheet</p>
+      </div>
+      <div class="filters">
+        <label class="muted">Date from <input id="fromDate" type="date" /></label>
+        <label class="muted">Date to <input id="toDate" type="date" /></label>
+                <input id="search" placeholder="Search organization..." />
+        <button id="clearFiltersBtn" type="button">Clear Filters</button>
+      </div>
+    </div>
+
+    <div id="app" class="loading">Loading dashboard data…</div>
+  </div>
+
+<script>
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vStzVyyVWvdBQEhmYFCuhNjsluP8uPgxRQGLOZj4g_2RJ6WnV0v-oOjS93bLNWnGQeXW1k_tDmznTS-/pub?gid=0&single=true&output=csv';
+let raw = [];
+let charts = {};
+const activeFilters = { org:null, reposted:null, positionType:null, monthYear:null };
+let defaultFromDate = null;
+let defaultToDate = null;
+
+const parseCSV = (text) => {
+  const rows = text.trim().split(/\r?\n/).map(row => {
+    const out=[]; let cur='', q=false;
+    for (let i=0;i<row.length;i++){
+      const ch=row[i], nx=row[i+1];
+      if (ch==='"'){ if (q && nx==='"'){cur+='"';i++;} else q=!q; }
+      else if (ch===',' && !q){ out.push(cur); cur=''; }
+      else cur+=ch;
+    }
+    out.push(cur); return out;
+  });
+  const headers = rows.shift();
+  return rows.map(cols => Object.fromEntries(headers.map((h,i)=>[h, cols[i] ?? ''])));
+};
+
+const toNum = (v) => Number(String(v).replace(/[^\d.-]/g,'')) || 0;
+const groupTop = (arr,key,n=8) => Object.entries(arr.reduce((a,r)=>{a[r[key]]=(a[r[key]]||0)+1;return a;},{})).sort((a,b)=>b[1]-a[1]).slice(0,n);
+const parseDate = (v) => {
+  const [m,d,y] = String(v).split('/').map(Number);
+  if (!m || !d || !y) return null;
+  return new Date(Date.UTC(y, m-1, d));
+};
+const fmt2 = (v) => (Math.round(v * 100) / 100).toFixed(2);
+
+function render(filtered){
+  const totalJobs = filtered.length;
+  const avgViews = totalJobs ? filtered.reduce((s,r)=>s+toNum(r['Total View Count']),0) / totalJobs : 0;
+  const avgUniqueViews = totalJobs ? filtered.reduce((s,r)=>s+toNum(r['Unique View Count']),0) / totalJobs : 0;
+  const totalPositions = filtered.reduce((s,r)=>s+toNum(r['Number of Positions']),0);
+  const avgDaysToExpire = totalJobs ? filtered.reduce((s,r)=>s+toNum(r['Days to Expire']),0) / totalJobs : 0;
+
+  const app = document.getElementById('app');
+  app.className='';
+  app.innerHTML = `
+    <div class="grid-kpi">
+      <div class="card"><div class="kpi-title">Job Postings</div><div class="kpi-value">${totalJobs.toLocaleString()}</div></div>
+      <div class="card"><div class="kpi-title">Total Positions</div><div class="kpi-value">${totalPositions.toLocaleString()}</div></div>
+      <div class="card"><div class="kpi-title">Avg Views</div><div class="kpi-value">${fmt2(avgViews)}</div></div>
+      <div class="card"><div class="kpi-title">Avg Unique Views</div><div class="kpi-value">${fmt2(avgUniqueViews)}</div></div>
+      <div class="card"><div class="kpi-title">Avg Days to Expire</div><div class="kpi-value">${fmt2(avgDaysToExpire)}</div></div>
+    </div>
+    <div class="main-grid">
+      <div class="card"><h3>Top Organizations by Job Count</h3><canvas id="orgChart" height="130"></canvas></div>
+      <div class="card"><h3>Reposted Distribution</h3><canvas id="repostedChart" height="130"></canvas></div>
+    </div>
+    <div class="card" style="margin-top:12px"><h3>Postings by Month (Year Comparison)</h3>
+      <div id="yearFilters" class="year-list"></div>
+      <canvas id="yearLineChart" height="120"></canvas>
+    </div>
+    <div class="charts-grid">
+      <div class="card"><h3>Position Types (with %)</h3><canvas id="positionChart" height="120"></canvas></div>
+      <div class="card"><h3>Job Posting Details</h3>
+      <div class="table-wrap"><table><thead><tr>
+      <th>Job ID</th><th>Organization</th><th>Date Created</th><th>Status</th><th>Type</th><th>City</th><th>Province/State</th><th>Days to Expire</th>
+      </tr></thead><tbody>
+      ${filtered.slice(0,250).map(r=>`<tr><td>${r['Job ID']}</td><td>${r['Organization Name']}</td><td>${r['Date Created']}</td><td>${r['Posting Status']}</td><td>${r['Position Type']}</td><td>${r['City']}</td><td>${r['Province / State']}</td><td>${r['Days to Expire']}</td></tr>`).join('')}
+      </tbody></table></div>
+      </div>
+    </div>`;
+
+  const destroy = (id)=>charts[id]?.destroy?.();
+  const mk = (id,config)=>{destroy(id); charts[id]=new Chart(document.getElementById(id),config)};
+
+  const orgTop = groupTop(filtered,'Organization Name',10);
+  mk('orgChart',{type:'bar',data:{labels:orgTop.map(x=>x[0]),datasets:[{label:'Jobs',data:orgTop.map(x=>x[1]),backgroundColor:'#1f77d0'}]},options:{plugins:{legend:{display:false}},scales:{x:{ticks:{maxRotation:60,minRotation:60}}},onClick:(evt,elements,chart)=>{if(!elements.length)return;const label=chart.data.labels[elements[0].index];activeFilters.org=activeFilters.org===label?null:label;applyFilters();}}});
+
+  const reposted = groupTop(filtered,'Reposted',10);
+  mk('repostedChart',{type:'doughnut',data:{labels:reposted.map(x=>x[0]),datasets:[{data:reposted.map(x=>x[1])}]},options:{plugins:{legend:{position:'bottom'}},onClick:(evt,elements,chart)=>{if(!elements.length)return;const label=chart.data.labels[elements[0].index];activeFilters.reposted=activeFilters.reposted===label?null:label;applyFilters();}}});
+
+  const pos = groupTop(filtered,'Position Type',8);
+  const posTotal = pos.reduce((s,[,v])=>s+v,0) || 1;
+  mk('positionChart',{type:'pie',data:{labels:pos.map(([k,v])=>`${k} (${((v/posTotal)*100).toFixed(1)}%)`),datasets:[{data:pos.map(x=>x[1])}]},options:{plugins:{legend:{position:'bottom'}},onClick:(evt,elements)=>{if(!elements.length)return;const idx=elements[0].index;const label=pos[idx][0];activeFilters.positionType=activeFilters.positionType===label?null:label;applyFilters();}}});
+
+  drawYearLines(filtered);
+}
+
+function drawYearLines(filtered){
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const rowsWithDate = filtered.map(r=>({ ...r, __date: parseDate(r['Date Created']) })).filter(r=>r.__date);
+  const years = [...new Set(rowsWithDate.map(r=>r.__date.getUTCFullYear()))].sort((a,b)=>a-b);
+
+  const box = document.getElementById('yearFilters');
+  box.innerHTML = years.map(y=>`<label><input type="checkbox" class="year-check" value="${y}" checked> ${y}</label>`).join('');
+
+  const updateLine = () => {
+    const selected = [...document.querySelectorAll('.year-check:checked')].map(el=>Number(el.value));
+    const colors = ['#1f77d0','#f97316','#10b981','#8b5cf6','#e11d48','#14b8a6','#f59e0b'];
+    const datasets = selected.map((year, idx) => {
+      const counts = Array(12).fill(0);
+      rowsWithDate.filter(r=>r.__date.getUTCFullYear()===year).forEach(r=>counts[r.__date.getUTCMonth()]++);
+      return { label: String(year), data: counts, borderColor: colors[idx % colors.length], tension: 0.3, fill:false };
+    });
+    charts['yearLineChart']?.destroy?.();
+    charts['yearLineChart'] = new Chart(document.getElementById('yearLineChart'), {
+      type:'line',
+      data:{labels:months,datasets},
+      options:{plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true,title:{display:true,text:'Number of Postings'}}},onClick:(evt,elements,chart)=>{if(!elements.length)return;const pt=elements[0];const year=Number(chart.data.datasets[pt.datasetIndex].label);const month=pt.index;const key=`${year}-${month}`;activeFilters.monthYear=activeFilters.monthYear===key?null:key;applyFilters();}}
+    });
+  };
+
+  document.querySelectorAll('.year-check').forEach(el=>el.addEventListener('change', updateLine));
+  updateLine();
+}
+
+
+function clearAllFilters(){
+  activeFilters.org = null;
+  activeFilters.reposted = null;
+  activeFilters.positionType = null;
+  activeFilters.monthYear = null;
+  document.getElementById('search').value = '';
+  if (defaultFromDate) document.getElementById('fromDate').value = defaultFromDate;
+  if (defaultToDate) document.getElementById('toDate').value = defaultToDate;
+  applyFilters();
+}
+
+function applyFilters(){
+  const fromDate = document.getElementById('fromDate').value ? new Date(document.getElementById('fromDate').value + 'T00:00:00Z') : null;
+  const toDate = document.getElementById('toDate').value ? new Date(document.getElementById('toDate').value + 'T23:59:59Z') : null;
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const filtered = raw.filter(r => {
+    const d = parseDate(r['Date Created']);
+    if (fromDate && (!d || d < fromDate)) return false;
+    if (toDate && (!d || d > toDate)) return false;
+    if (q && !r['Organization Name'].toLowerCase().includes(q)) return false;
+    if (activeFilters.org && r['Organization Name'] !== activeFilters.org) return false;
+    if (activeFilters.reposted && r['Reposted'] !== activeFilters.reposted) return false;
+    if (activeFilters.positionType && r['Position Type'] !== activeFilters.positionType) return false;
+    if (activeFilters.monthYear) {
+      if (!d) return false;
+      const [yr, mn] = activeFilters.monthYear.split('-').map(Number);
+      if (d.getUTCFullYear() !== yr || d.getUTCMonth() !== mn) return false;
+    }
+    return true;
+  });
+  render(filtered);
+}
+
+(async function init(){
+  const csv = await fetch(CSV_URL).then(r=>r.text());
+  raw = parseCSV(csv);
+
+
+  const dates = raw.map(r=>parseDate(r['Date Created'])).filter(Boolean).sort((a,b)=>a-b);
+  if (dates.length){
+    defaultFromDate = dates[0].toISOString().slice(0,10);
+    defaultToDate = dates[dates.length-1].toISOString().slice(0,10);
+    document.getElementById('fromDate').value = defaultFromDate;
+    document.getElementById('toDate').value = defaultToDate;
+  }
+
+  ['fromDate','toDate','search'].forEach(id=>document.getElementById(id).addEventListener('input',applyFilters));
+  document.getElementById('clearFiltersBtn').addEventListener('click', clearAllFilters);
+  applyFilters();
+})();
+</script>
+</body>
+</html>
